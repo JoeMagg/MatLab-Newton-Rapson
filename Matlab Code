@@ -1,0 +1,92 @@
+clc
+% Set the inital guess, tolerance, max iteration, and WFR to be used in
+% newton-rapson method later.
+WBT= 70;
+tol = 1e-6;
+max_iter = 100;
+WFR = 145000;
+x0 = [1; 1; 80; 9000; 250000; 6e8];
+scaling_factors = [10^(-1); 10^(-1); 10^(1); 10^(4); 10^(5); 10^(9)];
+
+
+% Using the Function created below, iterate until we converge to a solution
+x = newton_raphson(x0, WBT, WFR, tol, max_iter, scaling_factors);
+
+% Display the final estimated values from Newton-Rapson Function
+CP = x(1); CR = x(2); CWT = x(3);
+NHR = x(4); NKW = x(5); HL = x(6);
+
+fprintf('Heat Load (HL): %.2f Btu/h\n', HL);
+fprintf('Condenser Pressure (CP): %.2f psi\n', CP);
+fprintf('Turbine Net Heat Rate (NHR): %.2f Btu/kWh\n', NHR);
+fprintf('Turbine Net Output (NKW): %.2f kW\n', NKW);
+fprintf('Tower Approach: %.2f °F\n', CWT - WBT);
+fprintf('Tower Cooling Range: %.2f °F\n', CWT - CR);
+
+% Other functions remain unchanged
+
+% Step 1: Defining the given system of equations as a function and their
+% jacobian matrix 
+function [F, J] = cold_end_system(x, WBT, WFR) 
+    CP= x(1); CR=x(2); CWT=x(3);
+    NHR=x(4); NKW=x(5); HL=x(6);
+
+   % Equations
+    F1 = -45.19*CP^4 + 420*CP^3 - 1442*CP^2 + 2248*CP + 6666 - NHR;
+    F2 = 4883*CP^4 - 44890*CP^3 + 152600*CP^2 - 231500*CP + 383400 - NKW;
+    F3 = 1.6302 - 0.50095*10^(-1)*CWT^3 + 0.55796*10^(-3)*CWT^2 + 0.32946*10^(-3)*HL - 0.10229*10^(-4)*HL*CWT + 0.16253*10^(-6)*HL*CWT^2 + 0.42658*10^(-6)*HL^2 - 0.92331*10^(-8)*HL^2*CWT + 0.71265*10^(-10)*HL^2*CWT^2 - CP;
+    F4 = -0.10046*10^2 + 0.22801*10^(-3)*WFR + 0.85396*CR + 0.18617*10^(-5)*CR*WFR + 0.10957*10*WBT - 0.22425*10^(-5)*WBT*WFR - 0.11978*10^(-1)*WBT*CR + 0.14378*10^(-7)*WBT*CR*WFR - CWT;
+    F5 = 2000*(HL/WFR) - CR;
+    F6 = (NHR - 3412)*(NKW/10^6) - HL;
+
+    F = [F1; F2; F3; F4; F5; F6];
+    J = jacobian_custom(x, WBT, WFR);
+end
+
+function J = jacobian_custom(x, WBT, WFR)
+    CP = x(1); CWT = x(3); HL = x(6);
+
+    % Partial derivatives with respect to CP
+    dF1_dCP = -4*45.19*CP^3 + 3*420*CP^2 - 2*1442*CP + 2248;
+    dF2_dCP = 4*4883*CP^3 - 3*44890*CP^2 + 2*152600*CP - 231500;
+
+    % Partial derivatives with respect to CWT
+    dF3_dCWT = -3*0.50095*10^(-1)*CWT^2 + 2*0.55796*10^(-3)*CWT - 0.10229*10^(-4)*HL + 2*0.16253*10^(-6)*HL*CWT - 0.92331*10^(-8)*HL^2 + 2*0.71265*10^(-10)*HL^2*CWT;
+    
+    % Partial derivatives with respect to HL
+    dF3_dHL = 0.32946*10^(-3) - 0.10229*10^(-4)*CWT + 0.16253*10^(-6)*CWT^2 + 2*0.42658*10^(-6)*HL - 2*0.92331*10^(-8)*HL*CWT + 2*0.71265*10^(-10)*HL*CWT^2;
+    dF5_dHL = 2000/WFR;
+    
+    % Create the Jacobian matrix
+    J = [
+        dF1_dCP,  0,     0, 0, 0, 0;
+        dF2_dCP,  0,     0, 0, 0, 0;
+            0, 0, dF3_dCWT, 0, 0, dF3_dHL;
+            0, 0,     1, 0, 0, 0;
+            0, 0,     0, 0, 0, dF5_dHL;
+            0, 0,     0, 1, 1, 0
+        ];
+end
+
+% Step 2: Implement the Newton-Raphson iterative method
+function x = newton_raphson(x0, WBT, WFR, tol, max_iter, scaling_factors)
+    x = x0;
+    damping_factor = 0.8;
+    for i = 1:max_iter
+        [F, J] = cold_end_system(x, WBT, WFR);
+        F = F .* scaling_factors;
+        J = J .* (scaling_factors * scaling_factors');
+        dx = -J\F;
+
+        % Line search to improve convergence
+        alpha = 1;
+        while norm(cold_end_system(x + alpha * dx, WBT, WFR)) > norm(F)
+            alpha = alpha * damping_factor;
+        end
+
+        x = x + alpha * dx;
+        if norm(dx) < tol
+            break;
+        end
+    end
+end
